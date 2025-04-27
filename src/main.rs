@@ -1,14 +1,21 @@
-// main.rs
+mod uploader {
+    tonic::include_proto!("uploader");
+}
+
 use chrono::Utc;
 use scrap::{Capturer, Display};
+use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
+use std::time::Duration;
 use std::time::Instant;
-use std::{fs, time::Duration};
-// use tokio::time::sleep;
+use tokio::io::AsyncReadExt;
+use tonic::Request;
+use uploader::uploader_client::UploaderClient;
+use uploader::UploadRequest;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,18 +40,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             actual_secs
         );
 
-        // convert_raw_to_mp4(&raw_path, &mp4_path, width, height, frame_count)?;
-        convert_raw_to_mp4(
-            &raw_path,
-            &mp4_path,
-            width,
-            height,
-            frame_count,
-            actual_secs,
-        )?;
-        println!("Converted to MP4: {}", mp4_path.display());
+        let raw_path_clone = raw_path.clone();
+        let mp4_path_clone = mp4_path.clone();
 
-        // sleep(Duration::from_secs(10)).await;
+        thread::spawn(move || {
+            println!("Starting conversion in background...");
+            if let Err(e) = convert_raw_to_mp4(
+                &raw_path_clone,
+                &mp4_path_clone,
+                width,
+                height,
+                frame_count,
+                actual_secs,
+            ) {
+                eprintln!("Error during conversion: {}", e);
+            } else {
+                println!("FFmpeg conversion successful: {}", mp4_path_clone.display());
+
+                // After conversion -> Spawn upload task
+                let upload_path = mp4_path_clone.clone();
+                tokio::runtime::Handle::current().spawn(async move {
+                    if let Err(e) = upload_file_via_grpc(upload_path).await {
+                        eprintln!("Upload failed: {}", e);
+                    }
+                });
+            }
+        });
+
+        // ✅ Continue immediately
     }
 }
 
@@ -83,40 +106,6 @@ fn record_screen(
     Ok((w, h, frame_count, actual_secs))
 }
 
-// fn convert_raw_to_mp4(
-//     raw_path: &PathBuf,
-//     mp4_path: &PathBuf,
-//     width: usize,
-//     height: usize,
-//     frames: usize,
-// ) -> Result<(), Box<dyn std::error::Error>> {
-//     let frame_rate = (frames as f64 / 10.0).ceil() as usize;
-//     let status = Command::new("C:\\ffmpeg\\bin\\ffmpeg.exe")
-//         .args([
-//             "-f",
-//             "rawvideo",
-//             "-pixel_format",
-//             "bgra",
-//             "-video_size",
-//             &format!("{}x{}", width, height),
-//             "-framerate",
-//             &frame_rate.to_string(),
-//             "-i",
-//             raw_path.to_str().unwrap(),
-//             "-c:v",
-//             "libx264",
-//             "-pix_fmt",
-//             "yuv420p",
-//             mp4_path.to_str().unwrap(),
-//         ])
-//         .status()?;
-
-//     if !status.success() {
-//         return Err("FFmpeg failed to convert raw to mp4".into());
-//     }
-//     Ok(())
-// }
-
 fn convert_raw_to_mp4(
     raw_path: &PathBuf,
     mp4_path: &PathBuf,
@@ -125,7 +114,11 @@ fn convert_raw_to_mp4(
     frames: usize,
     duration_secs: f64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let frame_rate = (frames as f64 / duration_secs).round() as usize;
+    let mut frame_rate = (frames as f64 / duration_secs).round() as usize;
+    if frame_rate == 0 {
+        frame_rate = 1;
+    }
+
     let status = Command::new("C:\\ffmpeg\\bin\\ffmpeg.exe")
         .args([
             "-f",
@@ -147,10 +140,12 @@ fn convert_raw_to_mp4(
         .status()?;
 
     if status.success() {
-        println!("FFmpeg conversion successful");
-        
-        delete_raw_files(&raw_path.parent().unwrap().to_path_buf())?;
-        println!("Deleted raw files");
+        println!("Conversion succeeded!");
+
+        if raw_path.exists() {
+            fs::remove_file(raw_path)?;
+            println!("Deleted raw file: {}", raw_path.display());
+        }
     }
 
     if !status.success() {
@@ -159,12 +154,35 @@ fn convert_raw_to_mp4(
     Ok(())
 }
 
-fn delete_raw_files(tmp_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    for entry in fs::read_dir(tmp_dir)? {
-        let entry = entry?;
-        if entry.path().extension().map_or(false, |ext| ext == "raw") {
-            fs::remove_file(entry.path())?;
+pub async fn upload_file_via_grpc(mp4_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Connecting to gRPC server...");
+
+    let mut client = UploaderClient::connect("http://localhost:50051").await?;
+    let mut file = tokio::fs::File::open(&mp4_path).await?;
+
+    println!("Preparing file for upload: {}", mp4_path.display());
+
+    let mut buf = vec![0u8; 1024 * 1024];
+
+    let output_stream = async_stream::stream! {
+        loop {
+            let n = match file.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("Error reading file: {}", e);
+                    break;
+                }
+            };
+            let chunk = UploadRequest {
+                chunk: buf[..n].to_vec(),
+            };
+            yield chunk;
         }
-    }
+    };
+
+    let response = client.upload(Request::new(output_stream)).await?;
+    println!("Upload finished: {:?}", response.into_inner().message);
+
     Ok(())
 }

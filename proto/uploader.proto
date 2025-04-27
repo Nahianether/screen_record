@@ -1,0 +1,16 @@
+// proto/uploader.proto
+syntax = "proto3";
+
+package uploader;
+
+service Uploader {
+  rpc Upload(stream UploadRequest) returns (UploadResponse);
+}
+
+message UploadRequest {
+  bytes chunk = 1; // sending file chunk-by-chunk
+}
+
+message UploadResponse {
+  string message = 1;
+}
