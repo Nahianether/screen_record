@@ -15,6 +15,26 @@ pub fn convert_raw_to_mp4(
         frame_rate = 1;
     }
 
+    // let status = Command::new("C:\\ffmpeg\\bin\\ffmpeg.exe")
+    //     .args([
+    //         "-f",
+    //         "rawvideo",
+    //         "-pixel_format",
+    //         "bgra",
+    //         "-video_size",
+    //         &format!("{}x{}", width, height),
+    //         "-framerate",
+    //         &frame_rate.to_string(),
+    //         "-i",
+    //         raw_path.to_str().unwrap(),
+    //         "-c:v",
+    //         "libx264",
+    //         "-pix_fmt",
+    //         "yuv420p",
+    //         mp4_path.to_str().unwrap(),
+    //     ])
+    //     .status()?;
+
     let status = Command::new("C:\\ffmpeg\\bin\\ffmpeg.exe")
         .args([
             "-f",
@@ -29,6 +49,10 @@ pub fn convert_raw_to_mp4(
             raw_path.to_str().unwrap(),
             "-c:v",
             "libx264",
+            "-preset",
+            "ultrafast",
+            "-threads",
+            "2",
             "-pix_fmt",
             "yuv420p",
             mp4_path.to_str().unwrap(),

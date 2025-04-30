@@ -6,7 +6,6 @@ use std::time::Duration;
 use tokio::runtime::Runtime;
 
 use crate::modules::components::record_screen::record_screen_fl::record_screen;
-// use crate::modules::components::upload_via_grpc::upload_via_grpc_fl::upload_file_via_grpc;
 use crate::modules::components::video_conversion::video_conversion_fl::convert_raw_to_mp4;
 
 pub async fn process_screen_recording() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,17 +44,8 @@ pub async fn process_screen_recording() -> Result<(), Box<dyn std::error::Error>
         } else {
             println!("FFmpeg conversion successful: {}", mp4_path_clone.display());
 
-            // After conversion -> Spawn upload task
             let upload_path = mp4_path_clone.clone();
-            // Runtime::new().unwrap().block_on(async move {
-            //     if let Err(e) = upload_file_via_grpc(upload_path).await {
-            //         eprintln!("Upload failed: {}", e);
-            //     } else {
-            //         println!("Upload successful!");
-            //     }
-            // });
 
-            //
             Runtime::new().unwrap().block_on(async move {
                 if let Err(e) =
                     file_upload_to_grpc(&upload_path.display().to_string(), "23.98.93.20", "50057")
@@ -66,7 +56,6 @@ pub async fn process_screen_recording() -> Result<(), Box<dyn std::error::Error>
                     println!("Upload successful!");
                 }
             });
-            //
         }
     });
 
