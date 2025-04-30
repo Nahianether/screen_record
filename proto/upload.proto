@@ -1,0 +1,17 @@
+syntax = "proto3";
+package upload; // same package
+
+service UploadService { 
+  rpc UploadFile(stream UploadRequest) returns (UploadResponse);
+}
+
+message UploadRequest {
+  oneof type {
+    string name = 1;
+    bytes chunk = 2;
+  }
+}
+
+message UploadResponse {
+  string message = 1; // optional but good to have
+}
