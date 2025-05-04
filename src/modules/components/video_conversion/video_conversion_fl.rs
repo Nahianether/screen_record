@@ -64,7 +64,6 @@ pub fn convert_raw_to_mp4(
     Ok(())
 }
 
-
 fn get_ffmpeg_path() -> PathBuf {
     let exe_dir = std::env::current_exe()
         .expect("Failed to get current exe path")

@@ -15,6 +15,7 @@ log = "0.4"
 
 tokio-stream = "0.1"
 async-stream = "0.3"
+lazy_static = "1.4"
 
 # Upload module git repo
 grpc_video_server = { git = "https://github.com/blackshadow-software/grpc_video_server" }
