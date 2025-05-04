@@ -65,7 +65,17 @@ pub async fn process_screen_recording() -> Result<(), Box<dyn std::error::Error>
 
             if buffer.len() >= 4 {
                 let to_join: Vec<_> = buffer.drain(..4).collect();
-                let joined_output = tmp_dir_clone.join("final_combined.mp4");
+
+                let user_id = if cfg!(debug_assertions) {
+                    "fb01503c-0302-4033-9b0b-ab737ae1875f"
+                } else {
+                    "fb01503c-0302-4033-9b0b-ab737ae1875f"
+                };
+                let joined_output = tmp_dir_clone.join(format!(
+                    "{}_{}.mp4",
+                    user_id,
+                    Utc::now().format("%Y%m%dT%H%M%S")
+                ));
 
                 match join_mp4_files(&to_join, &joined_output) {
                     Ok(_) => {
