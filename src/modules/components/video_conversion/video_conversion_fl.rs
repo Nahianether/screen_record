@@ -15,27 +15,17 @@ pub fn convert_raw_to_mp4(
         frame_rate = 1;
     }
 
-    // let status = Command::new("C:\\ffmpeg\\bin\\ffmpeg.exe")
-    //     .args([
-    //         "-f",
-    //         "rawvideo",
-    //         "-pixel_format",
-    //         "bgra",
-    //         "-video_size",
-    //         &format!("{}x{}", width, height),
-    //         "-framerate",
-    //         &frame_rate.to_string(),
-    //         "-i",
-    //         raw_path.to_str().unwrap(),
-    //         "-c:v",
-    //         "libx264",
-    //         "-pix_fmt",
-    //         "yuv420p",
-    //         mp4_path.to_str().unwrap(),
-    //     ])
-    //     .status()?;
+    let ffmpeg_exe = if cfg!(debug_assertions) {
+        // In debug mode, use the path to the ffmpeg executable in the project directory
+        PathBuf::from("C:\\ffmpeg\\bin\\ffmpeg.exe")
+    } else {
+        // In release mode, use the path to the ffmpeg executable in the same directory as the exe
+        get_ffmpeg_path()
+    };
 
-    let status = Command::new("C:\\ffmpeg\\bin\\ffmpeg.exe")
+    println!("FFmpeg path: {}", ffmpeg_exe.display());
+
+    let status = Command::new(ffmpeg_exe)
         .args([
             "-f",
             "rawvideo",
@@ -72,4 +62,15 @@ pub fn convert_raw_to_mp4(
         return Err("FFmpeg failed to convert raw to mp4".into());
     }
     Ok(())
+}
+
+
+fn get_ffmpeg_path() -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .expect("Failed to get current exe path")
+        .parent()
+        .expect("No parent directory for exe")
+        .to_path_buf();
+
+    exe_dir.join("ffmpeg").join("ffmpeg.exe")
 }
