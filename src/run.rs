@@ -18,7 +18,12 @@ lazy_static::lazy_static! {
     static ref MP4_BUFFER: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 }
 
-pub async fn process_screen_recording() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn process_screen_recording(
+    user_id: &str,
+    api_url: &str,
+    grpc_server_ip: &str,
+    grpc_server_port: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let now = Utc::now();
     let ts = now.format("%Y%m%dT%H%M%S").to_string();
     let exe_dir = std::env::current_exe()?.parent().unwrap().to_path_buf();
@@ -47,6 +52,10 @@ pub async fn process_screen_recording() -> Result<(), Box<dyn std::error::Error>
     let raw_path_clone = raw_path.clone();
     let mp4_path_clone = mp4_path.clone();
     let tmp_dir_clone = tmp_dir.clone();
+    let user_id = user_id.to_string();
+    let api_url = api_url.to_string();
+    let grpc_server_ip = grpc_server_ip.to_string();
+    let grpc_server_port = grpc_server_port.to_string();
 
     thread::Builder::new()
         .name("convert_and_upload".into())
@@ -78,7 +87,7 @@ pub async fn process_screen_recording() -> Result<(), Box<dyn std::error::Error>
                 let user_id = if cfg!(debug_assertions) {
                     "fb01503c-0302-4033-9b0b-ab737ae1875f"
                 } else {
-                    "fb01503c-0302-4033-9b0b-ab737ae1875f"
+                    user_id.as_str()
                 };
                 let joined_output = tmp_dir_clone.join(format!(
                     "{}_{}.mp4",
@@ -100,15 +109,20 @@ pub async fn process_screen_recording() -> Result<(), Box<dyn std::error::Error>
                                 println!("🚀 Attempt {} to upload...", attempt);
                                 match file_upload_to_grpc(
                                     &joined_output.display().to_string(),
-                                    "23.98.93.20",
-                                    "50057",
+                                    &grpc_server_ip,
+                                    &grpc_server_port,
                                 )
                                 .await
                                 {
                                     Ok(_) => {
                                         println!("✅ Upload successful in {:.2?}", start.elapsed());
-                                        if let Err(e) =
-                                            video_id_send_to_api_fn(&client, &joined_output).await
+                                        if let Err(e) = video_id_send_to_api_fn(
+                                            &client,
+                                            &joined_output,
+                                            &user_id,
+                                            &api_url,
+                                        )
+                                        .await
                                         {
                                             println!("⚠️ Failed to send video Id to API: {}", e);
                                         } else {

@@ -5,9 +5,12 @@ use chrono::Utc;
 use reqwest::Client;
 use serde_json::json;
 
-pub async fn video_id_send_to_api_fn(client: &Client, video_id: &PathBuf) -> Result<()> {
-    let api_url = "https://app.trackforce.io/api/TrackerDesktop/AddWebCamEvent";
-
+pub async fn video_id_send_to_api_fn(
+    client: &Client,
+    video_id: &PathBuf,
+    user_id: &str,
+    api_url: &str,
+) -> Result<()> {
     println!("Sending video Id to the API...");
     let file_name = if let Some(name) = video_id.file_name().and_then(|name| name.to_str()) {
         println!("Video ID: {}", name);
@@ -24,10 +27,10 @@ pub async fn video_id_send_to_api_fn(client: &Client, video_id: &PathBuf) -> Res
     headers.insert("Content-Type", "application/json".parse()?);
 
     let payload = json!({
-        "employeeId": "fb01503c-0302-4033-9b0b-ab737ae1875f",
+        "employeeId": user_id,
         "accountId": 0,
         "fileId": file_name.to_string(),
-        "createdAt": Utc::now().to_rfc3339(),
+        "createdAt": (Utc::now() + chrono::Duration::hours(6)).to_rfc3339(),
     });
 
     println!("Payload: {}", payload.to_string());
