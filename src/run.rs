@@ -1,5 +1,6 @@
 use chrono::Utc;
 use grpc_video_server::file_upload_to_grpc;
+use reqwest::Client;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -8,6 +9,7 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::runtime::Runtime;
 
+use crate::modules::api::upload_video_id_fl::video_id_send_to_api_fn;
 use crate::modules::components::record_screen::record_screen_fl::record_screen;
 use crate::modules::components::video_conversion::components::join_mp4_files_fl::join_mp4_files;
 use crate::modules::components::video_conversion::video_conversion_fl::convert_raw_to_mp4;
@@ -24,6 +26,13 @@ pub async fn process_screen_recording() -> Result<(), Box<dyn std::error::Error>
     fs::create_dir_all(&tmp_dir)?;
     let raw_path = tmp_dir.join(format!("screencap_{}.raw", ts));
     let mp4_path = tmp_dir.join(format!("screencap_{}.mp4", ts));
+
+    let client = Client::builder()
+        .danger_accept_invalid_certs(true)
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .expect("Failed to create reqwest client");
 
     println!("Recording screen for 60 seconds...");
     let (width, height, frame_count, actual_secs) =
@@ -98,6 +107,13 @@ pub async fn process_screen_recording() -> Result<(), Box<dyn std::error::Error>
                                 {
                                     Ok(_) => {
                                         println!("✅ Upload successful in {:.2?}", start.elapsed());
+                                        if let Err(e) =
+                                            video_id_send_to_api_fn(&client, &joined_output).await
+                                        {
+                                            println!("⚠️ Failed to send video Id to API: {}", e);
+                                        } else {
+                                            println!("✅ Video ID sent to API successfully.");
+                                        }
                                         break;
                                     }
                                     Err(e) if attempt < MAX_RETRIES => {
