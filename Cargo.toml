@@ -25,6 +25,8 @@ anyhow = "1.0"
 # Upload module git repo
 grpc_video_server = { git = "https://github.com/blackshadow-software/grpc_video_server" }
 
+pyo3 = { version = "0.21", features = ["auto-initialize"] }
+
 [build-dependencies]
 tonic-build = "0.13"
 
