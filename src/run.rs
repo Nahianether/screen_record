@@ -29,8 +29,12 @@ pub async fn process_screen_recording(
     let exe_dir = std::env::current_exe()?.parent().unwrap().to_path_buf();
     let tmp_dir = exe_dir.join("temp");
     fs::create_dir_all(&tmp_dir)?;
+    let file_name = recorder_exe_url
+        .split('/')
+        .last()
+        .unwrap_or("screen_record.exe");
 
-    let recorder_exe = exe_dir.join("bin").join("screen_record.exe");
+    let recorder_exe = exe_dir.join("bin").join(&file_name);
     if !recorder_exe.exists() {
         fs::create_dir_all(&recorder_exe.parent().unwrap())?;
         match download_recorder_exe(recorder_exe_url, &recorder_exe).await {
@@ -52,7 +56,7 @@ pub async fn process_screen_recording(
         .timeout(Duration::from_secs(60))
         .build()?;
 
-    match record_screen_py(&mp4_path) {
+    match record_screen_py(&mp4_path, &file_name) {
         Ok(_) => {
             let mp4_path_clone = mp4_path.clone();
             let user_id = user_id.to_string();
@@ -128,9 +132,9 @@ pub async fn process_screen_recording(
     Ok(())
 }
 
-pub fn record_screen_py(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+pub fn record_screen_py(path: &PathBuf, file_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let exe_dir = std::env::current_exe()?.parent().unwrap().to_path_buf();
-    let recorder_exe = exe_dir.join("bin").join("screen_recorder.exe");
+    let recorder_exe = exe_dir.join("bin").join(&file_name);
 
     if !recorder_exe.exists() {
         return Err(format!(
