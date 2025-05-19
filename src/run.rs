@@ -1,8 +1,11 @@
 use chrono::Utc;
 use grpc_video_server::file_upload_to_grpc;
+use once_cell::sync::Lazy;
 use reqwest::Client;
 use std::fs;
+use std::io;
 use std::path::PathBuf;
+use std::process::Child;
 use std::process::Command;
 use std::sync::Mutex;
 use std::thread;
@@ -16,6 +19,8 @@ use crate::modules::api::upload_video_id_fl::video_id_send_to_api_fn;
 lazy_static::lazy_static! {
     static ref MP4_BUFFER: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 }
+
+static RECORDER_CHILD: Lazy<Mutex<Option<Child>>> = Lazy::new(|| Mutex::new(None));
 
 pub async fn process_screen_recording(
     user_id: &str,
@@ -149,7 +154,7 @@ pub fn record_screen_py(path: &PathBuf, file_name: &str) -> Result<(), Box<dyn s
     //     .arg(path.to_str().ok_or("Invalid path")?)
     //     .status()?;
     println!("{}", path.to_str().ok_or("Invalid path")?);
-    let status = Command::new(&recorder_exe)
+    let mut child = Command::new(&recorder_exe)
         .args([
             "--output",
             // "C:\\Recordings\\rust_clip.mp4",
@@ -161,13 +166,28 @@ pub fn record_screen_py(path: &PathBuf, file_name: &str) -> Result<(), Box<dyn s
             "--resolution",
             "1280x720",
         ])
-        .status()
-        .expect("Failed to run screen_record.py");
+        .spawn()?;
 
-    if status.success() {
+    if child.wait()?.success() {
         println!("✅ Recording saved to {}", path.display());
+        *RECORDER_CHILD.lock().unwrap() = Some(child);
         Ok(())
     } else {
-        Err(format!("❌ Recording failed with exit code: {:?}", status.code()).into())
+        Err(format!(
+            "❌ Recording failed with exit code: {:?}",
+            child.wait()?.code()
+        )
+        .into())
     }
+}
+
+pub fn stop_recorder() -> io::Result<()> {
+    if let Some(mut child) = RECORDER_CHILD.lock().unwrap().take() {
+        child.kill()?;
+        let status = child.wait()?;
+        println!("Recorder exited with: {}", status);
+    } else {
+        println!("Recorder was not running");
+    }
+    Ok(())
 }
