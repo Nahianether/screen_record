@@ -7,6 +7,7 @@ use std::io;
 use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
+use std::process::Stdio;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
@@ -16,6 +17,7 @@ use tokio::runtime::Runtime;
 use crate::modules::api::download::download_recorder_exe;
 use crate::modules::api::upload_video_id_fl::video_id_send_to_api_fn;
 
+pub const VIDEO_RECORDER_EXE: &str = "screen_record.exe";
 lazy_static::lazy_static! {
     static ref MP4_BUFFER: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 }
@@ -37,7 +39,7 @@ pub async fn process_screen_recording(
     let file_name = recorder_exe_url
         .split('/')
         .last()
-        .unwrap_or("screen_record.exe");
+        .unwrap_or(VIDEO_RECORDER_EXE);
 
     let recorder_exe = exe_dir.join("bin").join(&file_name);
     if !recorder_exe.exists() {
@@ -182,12 +184,40 @@ pub fn record_screen_py(path: &PathBuf, file_name: &str) -> Result<(), Box<dyn s
 }
 
 pub fn stop_recorder() -> io::Result<()> {
-    if let Some(mut child) = RECORDER_CHILD.lock().unwrap().take() {
-        child.kill()?;
-        let status = child.wait()?;
-        println!("Recorder exited with: {}", status);
+    match is_process_running(VIDEO_RECORDER_EXE) {
+        Ok(v) => match v {
+            true => kill_process_by_name(VIDEO_RECORDER_EXE),
+            false => {
+                println!("⚠️ Process {} is not running.", VIDEO_RECORDER_EXE);
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Process {} is not running.", VIDEO_RECORDER_EXE),
+                ));
+            }
+        },
+        Err(e) => Err(e),
+    }
+}
+
+fn is_process_running(exe_name: &str) -> io::Result<bool> {
+    let output = Command::new("tasklist")
+        .args(&["/FI", &format!("IMAGENAME eq {}", exe_name)])
+        .stdout(Stdio::piped())
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.to_lowercase().contains(&exe_name.to_lowercase()))
+}
+
+fn kill_process_by_name(exe_name: &str) -> io::Result<()> {
+    let status = Command::new("taskkill")
+        .args(&["/F", "/IM", exe_name])
+        .status()?;
+
+    if status.success() {
+        println!("✅ Successfully killed {}", exe_name);
     } else {
-        println!("Recorder was not running");
+        eprintln!("⚠️ taskkill exited with {:?}", status.code());
     }
     Ok(())
 }
