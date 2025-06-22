@@ -1431,6 +1431,7 @@ dependencies = [
  "grpc_video_server",
  "lazy_static",
  "log",
+ "once_cell",
  "prost",
  "reqwest",
  "scrap",
