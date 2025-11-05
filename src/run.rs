@@ -1,20 +1,15 @@
 use chrono::Utc;
 use grpc_video_server::file_upload_to_grpc;
-use once_cell::sync::Lazy;
 use reqwest::Client;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::Mutex;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
-use tokio::runtime::Runtime;
 
-use crate::modules::api::download::download_recorder_exe;
 use crate::modules::api::upload_video_id_fl::video_id_send_to_api_fn;
 
 pub const VIDEO_RECORDER_EXE: &str = "screen_record.exe";
@@ -26,7 +21,7 @@ lazy_static::lazy_static! {
 pub async fn process_screen_recording(
     user_id: &str,
     api_url: &str,
-    recorder_exe_url: &str,
+    _recorder_exe_url: &str,
     grpc_server_ip: &str,
     grpc_server_port: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -53,21 +48,35 @@ pub async fn process_screen_recording(
         }
     }
 
-    // Use absolute path for the recorder executable
-    let recorder_exe = exe_dir.join("bin").join("screen_record.exe");
+    // Try multiple locations for the recorder executable
+    let possible_locations = vec![
+        exe_dir.join("bin").join("screen_record.exe"),           // target/debug/bin/screen_record.exe
+        exe_dir.join("screen_record.exe"),                       // target/debug/screen_record.exe
+        exe_dir.parent().unwrap().parent().unwrap().join("screen_record.exe"), // project root
+        std::env::current_dir()?.join("screen_record.exe"),      // current working directory
+    ];
 
-    // Check if the executable exists (skip download for now)
-    if !recorder_exe.exists() {
-        return Err(format!(
-            "❌ Recorder executable not found at: {}\n\
-             Please ensure 'screen_record.exe' is placed in the 'bin' directory.\n\
-             Expected location: {}",
-            recorder_exe.display(),
-            exe_dir.join("bin").display()
-        ).into());
+    let mut recorder_exe: Option<PathBuf> = None;
+
+    println!("🔍 Searching for screen_record.exe...");
+    for location in &possible_locations {
+        println!("   Checking: {}", location.display());
+        if location.exists() {
+            println!("✅ Found recorder executable at: {}", location.display());
+            recorder_exe = Some(location.clone());
+            break;
+        }
     }
 
-    println!("✅ Recorder executable found at: {}", recorder_exe.display());
+    let recorder_exe = recorder_exe.ok_or_else(|| {
+        format!(
+            "❌ Recorder executable 'screen_record.exe' not found in any of these locations:\n{}",
+            possible_locations.iter()
+                .map(|p| format!("   - {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    })?;
 
     // Check if the file is accessible (not corrupted)
     match fs::metadata(&recorder_exe) {
