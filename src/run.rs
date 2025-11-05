@@ -3,6 +3,7 @@ use grpc_video_server::file_upload_to_grpc;
 use reqwest::Client;
 use std::fs;
 use std::io;
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
@@ -110,9 +111,11 @@ pub async fn process_screen_recording(
         fs::create_dir_all(&tmp_dir)?;
     }
 
-    // Execute the recorder with improved error handling
+    // Execute the recorder with improved error handling and real-time output
     println!("🚀 Executing recorder command...");
-    let output = Command::new(&recorder_exe)
+    println!("⏱️  Recording will take 120 seconds (2 minutes)...");
+
+    let mut child = Command::new(&recorder_exe)
         .current_dir(&exe_dir)
         .args([
             "--output",
@@ -126,7 +129,7 @@ pub async fn process_screen_recording(
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
         .map_err(|e| {
             format!(
                 "Failed to execute recorder at '{}': {} (Error code: {:?})\n\
@@ -146,7 +149,19 @@ pub async fn process_screen_recording(
             )
         })?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Read stdout in real-time
+    if let Some(stdout) = child.stdout.take() {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                println!("📹 {}", line);
+            }
+        }
+    }
+
+    // Wait for the process to complete
+    let output = child.wait_with_output()?;
+
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     println!(
@@ -154,13 +169,7 @@ pub async fn process_screen_recording(
         output.status.code()
     );
 
-    // Show output for debugging
-    if !stdout.is_empty() {
-        println!("=== RECORDER OUTPUT ===");
-        println!("{}", stdout);
-        println!("=== END OUTPUT ===");
-    }
-
+    // Show errors if any
     if !stderr.is_empty() {
         println!("=== RECORDER ERRORS ===");
         println!("{}", stderr);
@@ -354,13 +363,8 @@ pub async fn process_screen_recording(
             }
 
             Err(format!(
-                "Recording failed: No video file was created\nExit code: {:?}\nOutput: {}",
-                output.status.code(),
-                if stdout.is_empty() {
-                    "No output"
-                } else {
-                    &stdout
-                }
+                "Recording failed: No video file was created\nExit code: {:?}",
+                output.status.code()
             )
             .into())
         }
