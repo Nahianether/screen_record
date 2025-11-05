@@ -34,27 +34,51 @@ pub async fn process_screen_recording(
     let ts = now.format("%Y%m%dT%H%M%S").to_string();
     let exe_dir = std::env::current_exe()?.parent().unwrap().to_path_buf();
     let tmp_dir = exe_dir.join("temp");
-    fs::create_dir_all(&tmp_dir)?;
 
-    let file_name = recorder_exe_url
-        .split('/')
-        .last()
-        .unwrap_or(VIDEO_RECORDER_EXE);
+    // Ensure temp directory exists and is writable
+    println!("📂 Ensuring temp directory exists: {}", tmp_dir.display());
+    fs::create_dir_all(&tmp_dir).map_err(|e| {
+        format!("Failed to create temp directory at '{}': {}", tmp_dir.display(), e)
+    })?;
 
-    // let recorder_exe = exe_dir.join("bin").join(&file_name);
-    let recorder_exe = PathBuf::from("bin").join("screen_record.exe");
+    // Verify directory is accessible
+    match fs::read_dir(&tmp_dir) {
+        Ok(_) => println!("✅ Temp directory is accessible"),
+        Err(e) => {
+            return Err(format!(
+                "Temp directory exists but is not accessible: {} - Error: {}",
+                tmp_dir.display(),
+                e
+            ).into());
+        }
+    }
 
-    // Download executable if it doesn't exist
+    // Use absolute path for the recorder executable
+    let recorder_exe = exe_dir.join("bin").join("screen_record.exe");
+
+    // Check if the executable exists (skip download for now)
     if !recorder_exe.exists() {
-        fs::create_dir_all(&recorder_exe.parent().unwrap())?;
-        match download_recorder_exe(recorder_exe_url, &recorder_exe).await {
-            Ok(_) => {
-                println!("✅ Recorder executable downloaded successfully.");
+        return Err(format!(
+            "❌ Recorder executable not found at: {}\n\
+             Please ensure 'screen_record.exe' is placed in the 'bin' directory.\n\
+             Expected location: {}",
+            recorder_exe.display(),
+            exe_dir.join("bin").display()
+        ).into());
+    }
+
+    println!("✅ Recorder executable found at: {}", recorder_exe.display());
+
+    // Check if the file is accessible (not corrupted)
+    match fs::metadata(&recorder_exe) {
+        Ok(metadata) => {
+            if metadata.len() == 0 {
+                return Err(format!("Recorder executable is empty: {}", recorder_exe.display()).into());
             }
-            Err(e) => {
-                eprintln!("❌ Failed to download recorder executable: {}", e);
-                return Err(e.into());
-            }
+            println!("📊 Recorder executable size: {} bytes", metadata.len());
+        }
+        Err(e) => {
+            return Err(format!("Cannot access recorder executable: {} - Error: {}", recorder_exe.display(), e).into());
         }
     }
 
@@ -71,7 +95,14 @@ pub async fn process_screen_recording(
     println!("🔧 Recorder executable: {}", recorder_exe.display());
     println!("📁 Working directory: {}", exe_dir.display());
 
-    // Execute the Python recorder
+    // Verify paths before execution
+    if !tmp_dir.exists() {
+        println!("⚠️ Temp directory doesn't exist, creating: {}", tmp_dir.display());
+        fs::create_dir_all(&tmp_dir)?;
+    }
+
+    // Execute the recorder with improved error handling
+    println!("🚀 Executing recorder command...");
     let output = Command::new(&recorder_exe)
         .current_dir(&exe_dir)
         .args([
@@ -86,7 +117,25 @@ pub async fn process_screen_recording(
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()?;
+        .output()
+        .map_err(|e| {
+            format!(
+                "Failed to execute recorder at '{}': {} (Error code: {:?})\n\
+                 This might be due to:\n\
+                 1. The executable is corrupted or not a valid Windows executable\n\
+                 2. The executable is blocked by Windows (right-click > Properties > Unblock)\n\
+                 3. Missing required DLL files or dependencies\n\
+                 4. Antivirus software blocking execution\n\
+                 5. The file path contains invalid characters\n\
+                 Working directory: {}\n\
+                 Output path: {}",
+                recorder_exe.display(),
+                e,
+                e.raw_os_error(),
+                exe_dir.display(),
+                initial_path.display()
+            )
+        })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
