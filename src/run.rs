@@ -50,28 +50,46 @@ pub async fn process_screen_recording(
     }
 
     // Try multiple locations for the recorder executable
+    // IMPORTANT: Exclude target/debug/screen_record.exe as that's THIS program!
     let possible_locations = vec![
         exe_dir.join("bin").join("screen_record.exe"),           // target/debug/bin/screen_record.exe
-        exe_dir.join("screen_record.exe"),                       // target/debug/screen_record.exe
-        exe_dir.parent().unwrap().parent().unwrap().join("screen_record.exe"), // project root
+        exe_dir.parent().unwrap().parent().unwrap().join("screen_record.exe"), // project root (69MB file)
         std::env::current_dir()?.join("screen_record.exe"),      // current working directory
+        exe_dir.join("..").join("..").join("bin").join("screen_record.exe"), // project_root/bin/screen_record.exe
     ];
 
     let mut recorder_exe: Option<PathBuf> = None;
+    let current_exe = std::env::current_exe()?;
 
     println!("🔍 Searching for screen_record.exe...");
     for location in &possible_locations {
         println!("   Checking: {}", location.display());
+
+        // Skip if this is the current executable (prevent recursion!)
+        if location.canonicalize().ok() == current_exe.canonicalize().ok() {
+            println!("   ⚠️ Skipping - this is the current program itself");
+            continue;
+        }
+
         if location.exists() {
-            println!("✅ Found recorder executable at: {}", location.display());
-            recorder_exe = Some(location.clone());
-            break;
+            // Verify file size - the actual recorder should be larger (69MB)
+            if let Ok(metadata) = fs::metadata(&location) {
+                let size = metadata.len();
+                if size > 50_000_000 {  // Should be around 69MB
+                    println!("✅ Found recorder executable at: {} ({} MB)", location.display(), size / 1_000_000);
+                    recorder_exe = Some(location.clone());
+                    break;
+                } else {
+                    println!("   ⚠️ File too small ({} MB) - likely not the recorder", size / 1_000_000);
+                }
+            }
         }
     }
 
     let recorder_exe = recorder_exe.ok_or_else(|| {
         format!(
-            "❌ Recorder executable 'screen_record.exe' not found in any of these locations:\n{}",
+            "❌ Recorder executable 'screen_record.exe' not found in any of these locations:\n{}\n\
+             Note: Looking for the large (~69MB) screen recorder executable, not the compiled Rust program.",
             possible_locations.iter()
                 .map(|p| format!("   - {}", p.display()))
                 .collect::<Vec<_>>()
@@ -79,13 +97,10 @@ pub async fn process_screen_recording(
         )
     })?;
 
-    // Check if the file is accessible (not corrupted)
+    // Verify the executable is accessible
     match fs::metadata(&recorder_exe) {
-        Ok(metadata) => {
-            if metadata.len() == 0 {
-                return Err(format!("Recorder executable is empty: {}", recorder_exe.display()).into());
-            }
-            println!("📊 Recorder executable size: {} bytes", metadata.len());
+        Ok(_) => {
+            println!("✅ Recorder executable is accessible and ready");
         }
         Err(e) => {
             return Err(format!("Cannot access recorder executable: {} - Error: {}", recorder_exe.display(), e).into());
@@ -149,12 +164,12 @@ pub async fn process_screen_recording(
             )
         })?;
 
-    // Read stdout in real-time
+    // Read stdout in real-time (without adding extra emojis)
     if let Some(stdout) = child.stdout.take() {
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             if let Ok(line) = line {
-                println!("📹 {}", line);
+                println!("{}", line);
             }
         }
     }
