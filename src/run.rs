@@ -22,7 +22,7 @@ pub const VIDEO_RECORDER_EXE: &str = "screen_record.exe";
 lazy_static::lazy_static! {
     static ref VIDEO_BUFFER: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 }
-
+// screen_record.exe
 pub async fn process_screen_recording(
     user_id: &str,
     api_url: &str,
@@ -41,7 +41,8 @@ pub async fn process_screen_recording(
         .last()
         .unwrap_or(VIDEO_RECORDER_EXE);
 
-    let recorder_exe = exe_dir.join("bin").join(&file_name);
+    // let recorder_exe = exe_dir.join("bin").join(&file_name);
+    let recorder_exe = PathBuf::from("screen_record.exe");
 
     // Download executable if it doesn't exist
     if !recorder_exe.exists() {
@@ -266,7 +267,11 @@ pub async fn process_screen_recording(
                     println!("🗑️ Temporary file cleaned up");
                 }
                 Err(e) => {
-                    eprintln!("⚠️ Failed to delete temporary file: {} — {}", final_path.display(), e);
+                    eprintln!(
+                        "⚠️ Failed to delete temporary file: {} — {}",
+                        final_path.display(),
+                        e
+                    );
                     // Don't fail the process for cleanup issues
                 }
             }

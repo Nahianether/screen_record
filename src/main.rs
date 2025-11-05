@@ -9,7 +9,8 @@ async fn main() -> Result<()> {
         if let Err(e) = process_screen_recording(
             "fb01503c-0302-4033-9b0b-ab737ae1875f",
             "https://app.trackforce.io/api/TrackerDesktop/AddWebCamEvent",
-            "https://screen-record.ibos.io/file/screen_record.exe",
+            // "https://screen-record.ibos.io/file/screen_record.exe",
+            "https://drive.google.com/file/d/1Nd9DwSXr3oxrfa7f77j3OBHDF4MkA7YU/view?usp=sharing",
             "23.98.93.20",
             "50057",
         )
