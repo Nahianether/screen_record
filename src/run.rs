@@ -41,8 +41,8 @@ pub async fn process_screen_recording(
         .last()
         .unwrap_or(VIDEO_RECORDER_EXE);
 
-    // let recorder_exe = exe_dir.join("bin").join(&file_name);
-    let recorder_exe = PathBuf::from("screen_record.exe");
+    let recorder_exe = exe_dir.join("bin").join(&file_name);
+    // let recorder_exe = PathBuf::from("screen_record.exe");
 
     // Download executable if it doesn't exist
     if !recorder_exe.exists() {
