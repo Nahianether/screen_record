@@ -86,36 +86,79 @@ pub async fn process_screen_recording(
         let exe_path = recorder_exe_path.clone();
 
         let download_thread = std::thread::spawn(move || -> Result<(), String> {
+            println!("🔗 Attempting to connect to: {}", url);
+
             let client = reqwest::blocking::Client::builder()
                 .danger_accept_invalid_certs(true)
                 .connect_timeout(Duration::from_secs(30))
                 .timeout(Duration::from_secs(500))
+                .tcp_keepalive(Duration::from_secs(20))
+                .pool_idle_timeout(Duration::from_secs(90))
+                .user_agent("screen_record/0.1.1")
                 .build()
                 .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-            let response = client
-                .get(&url)
-                .send()
-                .map_err(|e| format!("Failed to download recorder executable: {}", e))?;
+            const MAX_RETRIES: u32 = 3;
+            let mut last_error = String::new();
 
-            if !response.status().is_success() {
-                return Err(format!(
-                    "Failed to download recorder executable: HTTP {}",
-                    response.status()
-                ));
+            for attempt in 1..=MAX_RETRIES {
+                if attempt > 1 {
+                    let delay_secs = 2u64.pow(attempt - 1); // Exponential backoff: 2, 4, 8 seconds
+                    println!("⏳ Waiting {} seconds before retry...", delay_secs);
+                    std::thread::sleep(Duration::from_secs(delay_secs));
+                }
+
+                println!("📡 Sending GET request (attempt {}/{})...", attempt, MAX_RETRIES);
+
+                match client.get(&url).send() {
+                    Ok(response) => {
+                        println!("📥 Response received: HTTP {}", response.status());
+
+                        if !response.status().is_success() {
+                            last_error = format!(
+                                "Failed to download recorder executable: HTTP {}\nURL: {}",
+                                response.status(),
+                                url
+                            );
+                            println!("⚠️  {}", last_error);
+                            continue;
+                        }
+
+                        println!("📦 Reading response bytes...");
+                        let bytes = match response.bytes() {
+                            Ok(b) => b,
+                            Err(e) => {
+                                last_error = format!("Failed to read recorder executable bytes: {}", e);
+                                println!("⚠️  {}", last_error);
+                                continue;
+                            }
+                        };
+
+                        println!("💾 Saving recorder executable ({} MB)...", bytes.len() / 1_000_000);
+
+                        match std::fs::write(&exe_path, &bytes) {
+                            Ok(_) => {
+                                println!("✅ Recorder executable downloaded successfully to: {}", exe_path.display());
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                return Err(format!("Failed to save recorder executable: {}", e));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        last_error = format!("Failed to download recorder executable from '{}': {}", url, e);
+                        if e.is_timeout() {
+                            last_error = format!("{}\n⏱️  The request timed out. Please check:\n  - Network connectivity\n  - Server is running and accessible\n  - Firewall settings", last_error);
+                        } else if e.is_connect() {
+                            last_error = format!("{}\n🔌 Connection failed. Please check:\n  - The URL is correct: {}\n  - The server is running and accessible\n  - Network firewall or proxy settings", last_error, url);
+                        }
+                        println!("⚠️  Attempt {}/{} failed: {}", attempt, MAX_RETRIES, e);
+                    }
+                }
             }
 
-            let bytes = response
-                .bytes()
-                .map_err(|e| format!("Failed to read recorder executable bytes: {}", e))?;
-
-            println!("💾 Saving recorder executable ({} MB)...", bytes.len() / 1_000_000);
-
-            std::fs::write(&exe_path, &bytes)
-                .map_err(|e| format!("Failed to save recorder executable: {}", e))?;
-
-            println!("✅ Recorder executable downloaded successfully to: {}", exe_path.display());
-            Ok(())
+            Err(format!("Download failed after {} attempts.\nLast error: {}", MAX_RETRIES, last_error))
         });
 
         download_thread
