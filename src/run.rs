@@ -81,11 +81,11 @@ pub async fn process_screen_recording(
             format!("Failed to create bin directory at '{}': {}", bin_dir.display(), e)
         })?;
 
-        // Use blocking client and spawn_blocking to avoid Tokio runtime conflicts
+        // Use std::thread to avoid Tokio runtime conflicts entirely
         let url = recorder_exe_url.to_string();
         let exe_path = recorder_exe_path.clone();
 
-        tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let download_thread = std::thread::spawn(move || -> Result<(), String> {
             let client = reqwest::blocking::Client::builder()
                 .danger_accept_invalid_certs(true)
                 .connect_timeout(Duration::from_secs(30))
@@ -116,10 +116,12 @@ pub async fn process_screen_recording(
 
             println!("✅ Recorder executable downloaded successfully to: {}", exe_path.display());
             Ok(())
-        })
-        .await
-        .map_err(|e| format!("Download task failed: {}", e))?
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        });
+
+        download_thread
+            .join()
+            .map_err(|_| "Download thread panicked")?
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     }
 
     let recorder_exe = recorder_exe_path;
