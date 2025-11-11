@@ -81,35 +81,45 @@ pub async fn process_screen_recording(
             format!("Failed to create bin directory at '{}': {}", bin_dir.display(), e)
         })?;
 
-        let response = Client::builder()
-            .danger_accept_invalid_certs(true)
-            .connect_timeout(Duration::from_secs(30))
-            .timeout(Duration::from_secs(500))
-            .build()?
-            .get(recorder_exe_url)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to download recorder executable: {}", e))?;
+        // Use blocking client and spawn_blocking to avoid Tokio runtime conflicts
+        let url = recorder_exe_url.to_string();
+        let exe_path = recorder_exe_path.clone();
 
-        if !response.status().is_success() {
-            return Err(format!(
-                "Failed to download recorder executable: HTTP {}",
-                response.status()
-            )
-            .into());
-        }
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let client = reqwest::blocking::Client::builder()
+                .danger_accept_invalid_certs(true)
+                .connect_timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(500))
+                .build()
+                .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read recorder executable bytes: {}", e))?;
+            let response = client
+                .get(&url)
+                .send()
+                .map_err(|e| format!("Failed to download recorder executable: {}", e))?;
 
-        println!("💾 Saving recorder executable ({} MB)...", bytes.len() / 1_000_000);
+            if !response.status().is_success() {
+                return Err(format!(
+                    "Failed to download recorder executable: HTTP {}",
+                    response.status()
+                ));
+            }
 
-        fs::write(&recorder_exe_path, bytes)
-            .map_err(|e| format!("Failed to save recorder executable: {}", e))?;
+            let bytes = response
+                .bytes()
+                .map_err(|e| format!("Failed to read recorder executable bytes: {}", e))?;
 
-        println!("✅ Recorder executable downloaded successfully to: {}", recorder_exe_path.display());
+            println!("💾 Saving recorder executable ({} MB)...", bytes.len() / 1_000_000);
+
+            std::fs::write(&exe_path, &bytes)
+                .map_err(|e| format!("Failed to save recorder executable: {}", e))?;
+
+            println!("✅ Recorder executable downloaded successfully to: {}", exe_path.display());
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("Download task failed: {}", e))?
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     }
 
     let recorder_exe = recorder_exe_path;
