@@ -22,7 +22,7 @@ lazy_static::lazy_static! {
 pub async fn process_screen_recording(
     user_id: &str,
     api_url: &str,
-    _recorder_exe_url: &str,
+    recorder_exe_url: &str,
     grpc_server_ip: &str,
     grpc_server_port: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -49,53 +49,70 @@ pub async fn process_screen_recording(
         }
     }
 
-    // Try multiple locations for the recorder executable
-    // IMPORTANT: Exclude target/debug/screen_record.exe as that's THIS program!
-    let possible_locations = vec![
-        exe_dir.join("bin").join("screen_record.exe"),           // target/debug/bin/screen_record.exe
-        exe_dir.parent().unwrap().parent().unwrap().join("screen_record.exe"), // project root (69MB file)
-        std::env::current_dir()?.join("screen_record.exe"),      // current working directory
-        exe_dir.join("..").join("..").join("bin").join("screen_record.exe"), // project_root/bin/screen_record.exe
-    ];
+    // Download recorder executable from URL
+    let bin_dir = exe_dir.join("bin");
+    let recorder_exe_path = bin_dir.join("screen_record.exe");
 
-    let mut recorder_exe: Option<PathBuf> = None;
-    let current_exe = std::env::current_exe()?;
-
-    println!("🔍 Searching for screen_record.exe...");
-    for location in &possible_locations {
-        println!("   Checking: {}", location.display());
-
-        // Skip if this is the current executable (prevent recursion!)
-        if location.canonicalize().ok() == current_exe.canonicalize().ok() {
-            println!("   ⚠️ Skipping - this is the current program itself");
-            continue;
-        }
-
-        if location.exists() {
-            // Verify file size - the actual recorder should be larger (69MB)
-            if let Ok(metadata) = fs::metadata(&location) {
-                let size = metadata.len();
-                if size > 50_000_000 {  // Should be around 69MB
-                    println!("✅ Found recorder executable at: {} ({} MB)", location.display(), size / 1_000_000);
-                    recorder_exe = Some(location.clone());
-                    break;
-                } else {
-                    println!("   ⚠️ File too small ({} MB) - likely not the recorder", size / 1_000_000);
-                }
+    // Check if the file already exists with correct size
+    let needs_download = if recorder_exe_path.exists() {
+        if let Ok(metadata) = fs::metadata(&recorder_exe_path) {
+            let size = metadata.len();
+            println!("📦 Found existing recorder executable ({} MB)", size / 1_000_000);
+            // If file is too small, re-download
+            if size < 50_000_000 {
+                println!("⚠️ File size is too small, will re-download");
+                true
+            } else {
+                println!("✅ Using existing recorder executable");
+                false
             }
+        } else {
+            true
         }
+    } else {
+        true
+    };
+
+    if needs_download {
+        println!("📥 Downloading recorder executable from: {}", recorder_exe_url);
+
+        // Ensure bin directory exists
+        fs::create_dir_all(&bin_dir).map_err(|e| {
+            format!("Failed to create bin directory at '{}': {}", bin_dir.display(), e)
+        })?;
+
+        let response = Client::builder()
+            .danger_accept_invalid_certs(true)
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(500))
+            .build()?
+            .get(recorder_exe_url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download recorder executable: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "Failed to download recorder executable: HTTP {}",
+                response.status()
+            )
+            .into());
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read recorder executable bytes: {}", e))?;
+
+        println!("💾 Saving recorder executable ({} MB)...", bytes.len() / 1_000_000);
+
+        fs::write(&recorder_exe_path, bytes)
+            .map_err(|e| format!("Failed to save recorder executable: {}", e))?;
+
+        println!("✅ Recorder executable downloaded successfully to: {}", recorder_exe_path.display());
     }
 
-    let recorder_exe = recorder_exe.ok_or_else(|| {
-        format!(
-            "❌ Recorder executable 'screen_record.exe' not found in any of these locations:\n{}\n\
-             Note: Looking for the large (~69MB) screen recorder executable, not the compiled Rust program.",
-            possible_locations.iter()
-                .map(|p| format!("   - {}", p.display()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    })?;
+    let recorder_exe = recorder_exe_path;
 
     // Verify the executable is accessible
     match fs::metadata(&recorder_exe) {
