@@ -86,8 +86,60 @@ pub async fn process_screen_recording(
         let exe_path = recorder_exe_path.clone();
 
         let download_thread = std::thread::spawn(move || -> Result<(), String> {
-            println!("🔗 Attempting to connect to: {}", url);
+            println!("🔗 Attempting to download from: {}", url);
 
+            // First, try with reqwest
+            println!("📡 Method 1: Trying reqwest HTTP client...");
+            match try_download_with_reqwest(&url, &exe_path) {
+                Ok(_) => {
+                    println!("✅ Download successful with reqwest");
+                    return Ok(());
+                }
+                Err(e) => {
+                    println!("⚠️  Reqwest download failed: {}", e);
+                    println!("🔄 Trying alternative download method...");
+                }
+            }
+
+            // Fallback: Try with curl
+            println!("📡 Method 2: Trying curl command...");
+            match try_download_with_curl(&url, &exe_path) {
+                Ok(_) => {
+                    println!("✅ Download successful with curl");
+                    return Ok(());
+                }
+                Err(e) => {
+                    println!("⚠️  Curl download failed: {}", e);
+                    println!("🔄 Trying final method...");
+                }
+            }
+
+            // Fallback: Try with PowerShell (Windows)
+            if cfg!(windows) {
+                println!("📡 Method 3: Trying PowerShell (Windows native)...");
+                match try_download_with_powershell(&url, &exe_path) {
+                    Ok(_) => {
+                        println!("✅ Download successful with PowerShell");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        println!("⚠️  PowerShell download failed: {}", e);
+                    }
+                }
+            }
+
+            Err(format!(
+                "All download methods failed for URL: {}\n\
+                Please ensure:\n\
+                  1. The URL is accessible from your network\n\
+                  2. The server at {} is running\n\
+                  3. Firewall/proxy settings allow the connection\n\
+                  4. Try manually downloading from the URL in a browser",
+                url, url
+            ))
+        });
+
+        fn try_download_with_reqwest(url: &str, exe_path: &std::path::Path) -> Result<(), String> {
             let client = reqwest::blocking::Client::builder()
                 .danger_accept_invalid_certs(true)
                 .connect_timeout(Duration::from_secs(30))
@@ -95,71 +147,113 @@ pub async fn process_screen_recording(
                 .tcp_keepalive(Duration::from_secs(20))
                 .pool_idle_timeout(Duration::from_secs(90))
                 .user_agent("screen_record/0.1.1")
+                .no_proxy()  // Disable proxy to avoid issues
                 .build()
                 .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-            const MAX_RETRIES: u32 = 3;
-            let mut last_error = String::new();
-
-            for attempt in 1..=MAX_RETRIES {
-                if attempt > 1 {
-                    let delay_secs = 2u64.pow(attempt - 1); // Exponential backoff: 2, 4, 8 seconds
-                    println!("⏳ Waiting {} seconds before retry...", delay_secs);
-                    std::thread::sleep(Duration::from_secs(delay_secs));
-                }
-
-                println!("📡 Sending GET request (attempt {}/{})...", attempt, MAX_RETRIES);
-
-                match client.get(&url).send() {
-                    Ok(response) => {
-                        println!("📥 Response received: HTTP {}", response.status());
-
-                        if !response.status().is_success() {
-                            last_error = format!(
-                                "Failed to download recorder executable: HTTP {}\nURL: {}",
-                                response.status(),
-                                url
-                            );
-                            println!("⚠️  {}", last_error);
-                            continue;
-                        }
-
-                        println!("📦 Reading response bytes...");
-                        let bytes = match response.bytes() {
-                            Ok(b) => b,
-                            Err(e) => {
-                                last_error = format!("Failed to read recorder executable bytes: {}", e);
-                                println!("⚠️  {}", last_error);
-                                continue;
-                            }
-                        };
-
-                        println!("💾 Saving recorder executable ({} MB)...", bytes.len() / 1_000_000);
-
-                        match std::fs::write(&exe_path, &bytes) {
-                            Ok(_) => {
-                                println!("✅ Recorder executable downloaded successfully to: {}", exe_path.display());
-                                return Ok(());
-                            }
-                            Err(e) => {
-                                return Err(format!("Failed to save recorder executable: {}", e));
-                            }
-                        }
+            println!("   Connecting to {}...", url);
+            let response = client
+                .get(url)
+                .send()
+                .map_err(|e| {
+                    let mut error_details = format!("Connection error: {}", e);
+                    if e.is_timeout() {
+                        error_details.push_str(" (timeout)");
+                    } else if e.is_connect() {
+                        error_details.push_str(" (connection refused/failed)");
+                    } else if e.is_request() {
+                        error_details.push_str(" (request failed)");
                     }
-                    Err(e) => {
-                        last_error = format!("Failed to download recorder executable from '{}': {}", url, e);
-                        if e.is_timeout() {
-                            last_error = format!("{}\n⏱️  The request timed out. Please check:\n  - Network connectivity\n  - Server is running and accessible\n  - Firewall settings", last_error);
-                        } else if e.is_connect() {
-                            last_error = format!("{}\n🔌 Connection failed. Please check:\n  - The URL is correct: {}\n  - The server is running and accessible\n  - Network firewall or proxy settings", last_error, url);
-                        }
-                        println!("⚠️  Attempt {}/{} failed: {}", attempt, MAX_RETRIES, e);
-                    }
-                }
+                    error_details
+                })?;
+
+            println!("   Response: HTTP {}", response.status());
+
+            if !response.status().is_success() {
+                return Err(format!("HTTP error: {}", response.status()));
             }
 
-            Err(format!("Download failed after {} attempts.\nLast error: {}", MAX_RETRIES, last_error))
-        });
+            let bytes = response.bytes()
+                .map_err(|e| format!("Failed to read bytes: {}", e))?;
+
+            println!("   Downloaded {} MB", bytes.len() / 1_000_000);
+
+            std::fs::write(exe_path, &bytes)
+                .map_err(|e| format!("Failed to write file: {}", e))?;
+
+            Ok(())
+        }
+
+        fn try_download_with_curl(url: &str, exe_path: &std::path::Path) -> Result<(), String> {
+            use std::process::Command;
+
+            let output = Command::new("curl")
+                .arg("-L")  // Follow redirects
+                .arg("-k")  // Insecure (ignore SSL)
+                .arg("-o")
+                .arg(exe_path)
+                .arg(url)
+                .arg("--connect-timeout")
+                .arg("30")
+                .arg("--max-time")
+                .arg("500")
+                .output()
+                .map_err(|e| format!("Failed to execute curl: {}", e))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Curl failed: {}", stderr));
+            }
+
+            // Verify file was created
+            if !exe_path.exists() {
+                return Err("File was not created".to_string());
+            }
+
+            let size = std::fs::metadata(exe_path)
+                .map_err(|e| format!("Failed to check file: {}", e))?
+                .len();
+
+            println!("   Downloaded {} MB", size / 1_000_000);
+            Ok(())
+        }
+
+        fn try_download_with_powershell(url: &str, exe_path: &std::path::Path) -> Result<(), String> {
+            use std::process::Command;
+
+            let ps_command = format!(
+                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
+                $ProgressPreference = 'SilentlyContinue'; \
+                Invoke-WebRequest -Uri '{}' -OutFile '{}' -TimeoutSec 500",
+                url,
+                exe_path.display()
+            );
+
+            let output = Command::new("powershell")
+                .arg("-NoProfile")
+                .arg("-NonInteractive")
+                .arg("-Command")
+                .arg(&ps_command)
+                .output()
+                .map_err(|e| format!("Failed to execute PowerShell: {}", e))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("PowerShell failed: {}", stderr));
+            }
+
+            // Verify file was created
+            if !exe_path.exists() {
+                return Err("File was not created".to_string());
+            }
+
+            let size = std::fs::metadata(exe_path)
+                .map_err(|e| format!("Failed to check file: {}", e))?
+                .len();
+
+            println!("   Downloaded {} MB", size / 1_000_000);
+            Ok(())
+        }
 
         download_thread
             .join()
