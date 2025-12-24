@@ -15,6 +15,63 @@ use crate::modules::api::upload_video_id_fl::video_id_send_to_api_fn;
 
 pub const VIDEO_RECORDER_EXE: &str = "screen_record.exe";
 
+/// Result of app directory lookup with diagnostic info
+struct AppDirectoryResult {
+    app_dir: PathBuf,
+    source: String,
+    checked_paths: Vec<(String, PathBuf, bool)>, // (source_name, path, exists)
+}
+
+/// Get a stable application directory that works when used as a library.
+/// This ensures the downloaded exe is found regardless of which project uses this library.
+fn get_app_directory_with_info() -> Result<AppDirectoryResult, Box<dyn std::error::Error>> {
+    let mut checked_paths = Vec::new();
+
+    // Try LOCALAPPDATA (Windows) first
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let app_dir = PathBuf::from(&local_app_data).join("screen_record");
+        let exe_path = app_dir.join("bin").join("screen_record.exe");
+        let exists = exe_path.exists();
+        checked_paths.push(("LOCALAPPDATA".to_string(), exe_path, exists));
+
+        if fs::create_dir_all(&app_dir).is_ok() {
+            return Ok(AppDirectoryResult {
+                app_dir,
+                source: format!("LOCALAPPDATA ({})", local_app_data),
+                checked_paths,
+            });
+        }
+    }
+
+    // Try HOME (Unix/macOS)
+    if let Ok(home) = std::env::var("HOME") {
+        let app_dir = PathBuf::from(&home).join(".screen_record");
+        let exe_path = app_dir.join("bin").join("screen_record.exe");
+        let exists = exe_path.exists();
+        checked_paths.push(("HOME".to_string(), exe_path, exists));
+
+        if fs::create_dir_all(&app_dir).is_ok() {
+            return Ok(AppDirectoryResult {
+                app_dir,
+                source: format!("HOME ({})", home),
+                checked_paths,
+            });
+        }
+    }
+
+    // Fallback to exe directory
+    let exe_dir = std::env::current_exe()?.parent().unwrap().to_path_buf();
+    let exe_path = exe_dir.join("bin").join("screen_record.exe");
+    let exists = exe_path.exists();
+    checked_paths.push(("EXE_DIR".to_string(), exe_path, exists));
+
+    Ok(AppDirectoryResult {
+        app_dir: exe_dir.clone(),
+        source: format!("EXE_DIR ({})", exe_dir.display()),
+        checked_paths,
+    })
+}
+
 lazy_static::lazy_static! {
     static ref VIDEO_BUFFER: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 }
@@ -28,8 +85,15 @@ pub async fn process_screen_recording(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let now = Utc::now();
     let ts = now.format("%Y%m%dT%H%M%S").to_string();
-    let exe_dir = std::env::current_exe()?.parent().unwrap().to_path_buf();
-    let tmp_dir = exe_dir.join("temp");
+
+    // Use a stable directory that works when used as a library
+    // Priority: LOCALAPPDATA/screen_record > HOME/.screen_record > exe_dir
+    let app_dir_info = get_app_directory_with_info()?;
+    let app_dir = app_dir_info.app_dir.clone();
+    let tmp_dir = app_dir.join("temp");
+    let bin_dir = app_dir.join("bin");
+
+    println!("📁 Using app directory: {} (source: {})", app_dir.display(), app_dir_info.source);
 
     // Ensure temp directory exists and is writable
     println!("📂 Ensuring temp directory exists: {}", tmp_dir.display());
@@ -50,7 +114,6 @@ pub async fn process_screen_recording(
     }
 
     // Download recorder executable from URL
-    let bin_dir = exe_dir.join("bin");
     let recorder_exe_path = bin_dir.join("screen_record.exe");
 
     // Check if the file already exists with correct size
@@ -265,11 +328,40 @@ pub async fn process_screen_recording(
 
     // Verify the executable is accessible
     match fs::metadata(&recorder_exe) {
-        Ok(_) => {
-            println!("✅ Recorder executable is accessible and ready");
+        Ok(metadata) => {
+            let size_mb = metadata.len() / 1_000_000;
+            println!("✅ Recorder executable is accessible and ready ({} MB)", size_mb);
         }
         Err(e) => {
-            return Err(format!("Cannot access recorder executable: {} - Error: {}", recorder_exe.display(), e).into());
+            // Build detailed error message with all checked paths
+            let mut error_msg = format!(
+                "❌ Cannot access recorder executable!\n\n\
+                 Error: {}\n\n\
+                 Expected path: {}\n\n\
+                 App directory source: {}\n\n\
+                 All checked paths:\n",
+                e,
+                recorder_exe.display(),
+                app_dir_info.source
+            );
+
+            for (source, path, exists) in &app_dir_info.checked_paths {
+                let status = if *exists { "✅ EXISTS" } else { "❌ NOT FOUND" };
+                error_msg.push_str(&format!("  - [{}] {}: {}\n", status, source, path.display()));
+            }
+
+            error_msg.push_str(&format!(
+                "\nPossible solutions:\n\
+                 1. Check if the download URL is accessible: {}\n\
+                 2. Ensure write permissions to: {}\n\
+                 3. Check if antivirus is blocking the download\n\
+                 4. Try manually downloading the file to: {}",
+                recorder_exe_url,
+                bin_dir.display(),
+                recorder_exe.display()
+            ));
+
+            return Err(error_msg.into());
         }
     }
 
@@ -284,7 +376,7 @@ pub async fn process_screen_recording(
 
     println!("🎬 Starting recording to: {}", initial_path.display());
     println!("🔧 Recorder executable: {}", recorder_exe.display());
-    println!("📁 Working directory: {}", exe_dir.display());
+    println!("📁 Working directory: {}", app_dir.display());
 
     // Verify paths before execution
     if !tmp_dir.exists() {
@@ -297,7 +389,7 @@ pub async fn process_screen_recording(
     println!("⏱️  Recording will take 120 seconds (2 minutes)...");
 
     let mut child = Command::new(&recorder_exe)
-        .current_dir(&exe_dir)
+        .current_dir(&app_dir)
         .args([
             "--output",
             initial_path.to_str().ok_or("Invalid path")?,
@@ -325,7 +417,7 @@ pub async fn process_screen_recording(
                 recorder_exe.display(),
                 e,
                 e.raw_os_error(),
-                exe_dir.display(),
+                app_dir.display(),
                 initial_path.display()
             )
         })?;
